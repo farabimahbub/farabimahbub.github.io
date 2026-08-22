@@ -1,0 +1,78 @@
+name: Refresh bookshelf and publish
+
+# Reads the Goodreads shelves, commits the result, and publishes the site.
+#
+# Refresh and publish live in one run on purpose. A commit pushed with
+# GITHUB_TOKEN does not trigger other workflows, so if Pages were set to
+# "deploy from branch" the daily refresh would update bookshelf.html in the
+# repository without rebuilding the live site. The repo would look right and
+# the site would be stale. Deploying here removes that failure entirely.
+#
+# Requires: Settings > Pages > Source set to "GitHub Actions".
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 4 * * *'   # daily, 04:17 UTC
+  workflow_dispatch:        # and on demand from the Actions tab
+
+permissions:
+  contents: write   # to commit the refreshed page
+  pages: write      # to publish
+  id-token: write   # to prove the deploy came from this workflow
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Read the Goodreads shelves
+        run: python tools/refresh_shelves.py
+
+      - name: Commit if anything changed
+        run: |
+          if git diff --quiet -- bookshelf.html; then
+            echo "shelves unchanged"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bookshelf.html
+          git commit -m "Refresh bookshelf from Goodreads"
+          git push
+
+      - name: Assemble the published site
+        run: |
+          mkdir -p _site
+          rsync -a \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude 'tools' \
+            --exclude '_site' \
+            ./ _site/
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

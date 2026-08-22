@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Projects &middot; Md Farabi Mahbub</title>
+<meta name="description" content="Selected machine learning projects: arsenic prediction before digging, visual pollution detection from dashcam video, Coin U-Net segmentation, glycemic control prediction.">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Space+Mono:wght@400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css?v=5">
+<link rel="canonical" href="https://farabimahbub.github.io/projects.html">
+<meta property="og:url" content="https://farabimahbub.github.io/projects.html">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Projects &middot; Md Farabi Mahbub">
+<script>try{if(localStorage.getItem('fm-theme')==='dark')document.documentElement.setAttribute('data-theme','dark')}catch(e){}</script>
+<script src="assets/main.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+
+  <aside class="sidebar">
+    <a class="brand" href="index.html">FM</a>
+    <nav class="nav" aria-label="Sections">
+      <a href="index.html">Home</a>
+      <a href="research.html">Research</a>
+      <a href="projects.html" aria-current="page">Projects</a>
+      <a href="experience.html">Experience</a>
+      <a href="education.html">Education</a>
+      <a href="awards.html">Awards</a>
+      <a href="updates.html">Updates</a>
+      <a href="bookshelf.html">Bookshelf</a>
+    </nav>
+    <div class="social">
+      <a href="mailto:farabimahbub@gmail.com">Email</a>
+      <a href="https://github.com/farabimahbub" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://www.linkedin.com/in/farabimahbub" target="_blank" rel="noopener">LinkedIn</a>
+      <a href="https://scholar.google.com/citations?user=rqI1NVMAAAAJ" target="_blank" rel="noopener">Scholar</a>
+      <a href="https://orcid.org/0009-0001-5805-5018" target="_blank" rel="noopener">ORCID</a>
+      <a href="assets/cv.pdf">CV</a>
+    </div>
+    <button class="theme-toggle" id="theme-toggle" type="button">Dark</button>
+  </aside>
+
+  <main class="main" id="main">
+
+    <h1 class="page-title">Projects</h1>
+    <p class="lede">Work that produced software or a paper.</p>
+
+    <div class="section"><h2>Selected</h2></div>
+    <div class="list">
+
+      <div class="row">
+        <div class="meta"><span>SCIKIT-LEARN</span><span>CGAN</span><span>DJANGO</span></div>
+        <div>
+          <div class="row-head"><h3 class="row-title">From Data to Safety: arsenic prediction before digging</h3></div>
+          <p>A machine learning framework that predicts groundwater arsenic from parameters available before a well is dug, removing the need for costly water sampling. CGAN-synthesised data covers gaps in the record, explainable AI keeps the predictions inspectable, and the best model was deployed as a web application.</p>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="meta"><span>PYTORCH</span><span>YOLOv7</span><span>FLASK</span></div>
+        <div>
+          <div class="row-head"><h3 class="row-title">Counting visual pollution from a moving car</h3></div>
+          <p>A labelled street-level dataset compiled from Google Street View and augmented for training, several YOLO detectors trained on it, and a prototype that runs YOLOv7 on dashcam footage in real time, tracking and counting polluted objects into a dashboard summarising pollution along a route.</p>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="meta"><span>PYTORCH</span><span>SIAMESE</span><span>U-NET</span></div>
+        <div>
+          <div class="row-head"><h3 class="row-title">Coin U-Net: segmentation with a context signal</h3></div>
+          <p>Biomedical segmentation where a plain U-Net struggles. A Siamese branch trains on each image paired with a masked version, giving the model a context signal for separating infected regions from healthy tissue, and capturing both short and long-range structure.</p>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="meta"><span>SCIKIT-LEARN</span><span>SHAP &middot; LIME</span><span>SMOTE</span></div>
+        <div>
+          <div class="row-head"><h3 class="row-title">Glycemic control in diabetes patients</h3></div>
+          <p>Predicting whether a patient&rsquo;s blood sugar is under control, with SMOTE for the class imbalance and SHAP, LIME and Shapash to show what the model was keying on. Published at CoMeSySo 2023 and listed under <a href="research.html">Research</a>.</p>
+        </div>
+      </div>
+      <div class="row">
+        <div class="meta"><span>DJANGO</span><span>STRIPE</span><span>JQUERY</span></div>
+        <div>
+          <div class="row-head"><h3 class="row-title">FridayHaat: an online shop</h3></div>
+          <p>An eCommerce platform built on Django, with a custom user model, email activation, Google sign-in through allauth, and guest checkout for buyers who want no account. Stripe handles customers, cards and charges. Product search runs across title, description, category, price, manufacturer and tags in a single query. The cart, the contact form and the payment step call a JSON endpoint through jQuery, so those actions leave the page in place.</p>
+        </div>
+      </div>
+
+    </div>
+
+    <p class="note">Code available on request.</p>
+
+    <div class="section"><h2>Tools</h2></div>
+    <p class="tools">Python, C, C++, Java &middot; PyTorch, scikit-learn &middot; Google Earth Engine, Sentinel-1/2, raster processing &middot; Stata &middot; pandas, seaborn, matplotlib &middot; Flask, Django &middot; MySQL, PostgreSQL &middot; LaTeX</p>
+
+
+  </main>
+</div>
+</body>
+</html>
