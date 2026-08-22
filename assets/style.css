@@ -80,6 +80,10 @@ a:hover { color: var(--acc-h); }
   min-height: 100vh;
   display: grid;
   grid-template-columns: 216px minmax(0, 1fr);
+  /* 216 sidebar + 840 main. Centring the pair keeps the rail beside the
+     text on a wide screen instead of stranding it at the window edge. */
+  max-width: 1056px;
+  margin: 0 auto;
 }
 
 .sidebar {
@@ -305,6 +309,14 @@ a:hover { color: var(--acc-h); }
   padding-left: 15px;
 }
 
+.row p.pub-note {
+  font-size: 14.5px;
+  line-height: 1.7;
+  margin: 9px 0 0;
+  max-width: 62ch;
+  color: var(--mut);
+}
+
 .row p.pub-links {
   margin: 14px 0 0;
   display: flex;
@@ -380,6 +392,9 @@ a:hover { color: var(--acc-h); }
 .portrait {
   width: 172px;
   height: 210px;
+  /* the text column runs about 330px, the portrait 210px. this closes
+     roughly half the gap without pretending the two are centred. */
+  margin-top: 30px;
   object-fit: cover;
   border-radius: 2px;
   display: block;
@@ -481,7 +496,7 @@ a:hover { color: var(--acc-h); }
   .main { padding: 40px 24px 72px; }
 
   .hero { grid-template-columns: minmax(0, 1fr); gap: 28px; }
-  .portrait { width: 148px; height: 180px; }
+  .portrait { width: 148px; height: 180px; margin-top: 0; }
 }
 
 @media (max-width: 620px) {
