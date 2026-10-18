@@ -29,7 +29,8 @@ The one public place with the exact value is the updates feed ("gave 3.5 stars
 to ..."), and it only holds the last ten actions on the account. So each run
 reads it and keeps what it finds in tools/ratings.json, keyed by Goodreads book
 id. A rating captured once stays after it scrolls out of the updates feed.
-Ratings older than the capture can be added to that file by hand:
+Ratings older than the capture can be added to that file by hand, from the
+`Book Id` and `My Rating` columns of a Goodreads library export:
 
     {"17308035": 4.75, "205544315": 3.5}
 
