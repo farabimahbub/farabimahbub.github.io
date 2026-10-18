@@ -20,20 +20,27 @@ show the shelf, and there is nothing to fail while somebody is looking at it.
 .github/workflows/refresh-shelves.yml runs this daily.
 
 Ratings come from `user_rating` in the feed, which is the rating the account
-holder gave, not the community average. Goodreads now accepts partial stars on
-the site, but the feed still rounds them to whole stars, and the shelf pages
-that show the exact value need a sign-in. So exact scores live in
-tools/ratings.json, keyed by the Goodreads book id (the number in the book's
-URL, also `book_id` in the feed):
+holder gave, not the community average. Goodreads accepts half and quarter
+stars, but the shelf feed rounds them to the nearest whole star, with a half
+rounding down (3.5 shows as 3, 3.75 as 4). The shelf and review pages that show
+the exact value need a sign-in.
 
-    {"17308035": 4.5, "40597810": 3.75}
+The one public place with the exact value is the updates feed ("gave 3.5 stars
+to ..."), and it only holds the last ten actions on the account. So each run
+reads it and keeps what it finds in tools/ratings.json, keyed by Goodreads book
+id. A rating captured once stays after it scrolls out of the updates feed.
+Ratings older than the capture can be added to that file by hand:
 
-An entry there wins over the feed. Books without one show the feed's rating.
-Scores are clamped to 0 to 5, and any fraction is drawn as a partial star.
+    {"17308035": 4.75, "205544315": 3.5}
+
+A stored score is used only while it still rounds to what the shelf feed says.
+If it does not, the rating was changed since, so the stored score is dropped
+and the shelf feed's whole star is shown until the new rating is captured.
 """
 
 import html
 import json
+import math
 import os
 import re
 import sys
@@ -43,6 +50,7 @@ from datetime import datetime, timezone
 USER = '195366376'
 FEED = 'https://www.goodreads.com/review/list_rss/{user}?shelf={shelf}&page={page}'
 PROFILE = 'https://www.goodreads.com/review/list/{user}?shelf={shelf}'
+UPDATES = 'https://www.goodreads.com/user/updates_rss/{user}'
 UA = 'Mozilla/5.0 (compatible; shelf-refresh/1.0)'
 MAX_PAGES = 10
 
@@ -78,7 +86,28 @@ def exact_ratings():
         return {str(k): float(v) for k, v in json.load(f).items()}
 
 
-def books(shelf, exact):
+def recent_ratings():
+    # Newest first, so the first rating seen for a book is the current one.
+    # A failure here costs only the newest ratings, so it does not stop the run.
+    try:
+        xml = fetch(UPDATES.format(user=USER))
+    except OSError as e:
+        print('updates feed unavailable: %s' % e)
+        return {}
+    out = {}
+    for it in re.findall(r'<item>(.*?)</item>', xml, re.S):
+        m = re.search(r'gave ([\d.]+) stars? to <a[^>]*href="[^"]*/book/show/(\d+)', it)
+        if m:
+            out.setdefault(m.group(2), float(m.group(1)))
+    return out
+
+
+def as_shelf_feed(score):
+    # How the shelf feed rounds a partial rating: nearest star, half down.
+    return math.ceil(score - 0.5)
+
+
+def books(shelf, exact, stale):
     out = []
     for page in range(1, MAX_PAGES + 1):
         xml = fetch(FEED.format(user=USER, shelf=shelf, page=page))
@@ -98,7 +127,12 @@ def books(shelf, exact):
                 rating = float(field(it, 'user_rating') or 0)
             except ValueError:
                 rating = 0.0
-            rating = exact.get(field(it, 'book_id'), rating)
+            book_id = field(it, 'book_id')
+            if book_id in exact:
+                if as_shelf_feed(exact[book_id]) == rating:
+                    rating = exact[book_id]
+                else:
+                    stale.add(book_id)
             out.append({
                 'title': title,
                 'author': field(it, 'author_name'),
@@ -153,9 +187,11 @@ def main():
     page = open(PAGE, encoding='utf-8').read()
     total = {}
     exact = exact_ratings()
+    exact.update(recent_ratings())
+    stale = set()
 
     for shelf in SHELVES:
-        entries = books(shelf['slug'], exact)
+        entries = books(shelf['slug'], exact, stale)
         total[shelf['slug']] = len(entries)
         block = render(shelf, entries)
         start = '<!-- shelf:%s:start -->' % shelf['marker']
@@ -173,9 +209,16 @@ def main():
     )
 
     open(PAGE, 'w', encoding='utf-8', newline='').write(page)
+
+    kept = {k: v for k, v in exact.items() if k not in stale}
+    with open(RATINGS, 'w', encoding='utf-8', newline='\n') as f:
+        json.dump(kept, f, indent=2, sort_keys=True)
+        f.write('\n')
+
     print('currently reading: %d' % total['currently-reading'])
     print('read:              %d' % total['read'])
-    print('written to bookshelf.html')
+    print('exact ratings:     %d kept, %d dropped as changed' % (len(kept), len(stale)))
+    print('written to bookshelf.html and tools/ratings.json')
 
 
 if __name__ == '__main__':
