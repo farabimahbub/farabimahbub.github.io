@@ -20,13 +20,20 @@ show the shelf, and there is nothing to fail while somebody is looking at it.
 .github/workflows/refresh-shelves.yml runs this daily.
 
 Ratings come from `user_rating` in the feed, which is the rating the account
-holder gave, not the community average. Goodreads caps that at whole stars out
-of five. To show a finer scale instead, add a file mapping the book id from
-`link` to your own score and read it in `books()`; the rest of the file needs
-no change.
+holder gave, not the community average. Goodreads now accepts partial stars on
+the site, but the feed still rounds them to whole stars, and the shelf pages
+that show the exact value need a sign-in. So exact scores live in
+tools/ratings.json, keyed by the Goodreads book id (the number in the book's
+URL, also `book_id` in the feed):
+
+    {"17308035": 4.5, "40597810": 3.75}
+
+An entry there wins over the feed. Books without one show the feed's rating.
+Scores are clamped to 0 to 5, and any fraction is drawn as a partial star.
 """
 
 import html
+import json
 import os
 import re
 import sys
@@ -41,6 +48,11 @@ MAX_PAGES = 10
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE = os.path.join(HERE, os.pardir, 'bookshelf.html')
+RATINGS = os.path.join(HERE, 'ratings.json')
+
+# Star geometry, matching .book .stars in style.css: each star is 12.6px wide
+# on a 16px pitch, five of them in 77px.
+STAR_W, STAR_PITCH, STARS_W = 12.6, 16, 77
 
 SHELVES = [
     {'slug': 'currently-reading', 'marker': 'reading', 'heading': 'Currently reading', 'stars': False},
@@ -59,7 +71,14 @@ def field(item, name):
     return html.unescape(m.group(1)).strip() if m else ''
 
 
-def books(shelf):
+def exact_ratings():
+    if not os.path.exists(RATINGS):
+        return {}
+    with open(RATINGS, encoding='utf-8') as f:
+        return {str(k): float(v) for k, v in json.load(f).items()}
+
+
+def books(shelf, exact):
     out = []
     for page in range(1, MAX_PAGES + 1):
         xml = fetch(FEED.format(user=USER, shelf=shelf, page=page))
@@ -76,15 +95,16 @@ def books(shelf):
             cover = re.sub(r'\._S[XY]\d+_(?=\.[a-z]+$)', '._SY160_', cover)
             title = re.sub(r'\s+By:.*$', '', field(it, 'title')).strip()
             try:
-                rating = int(field(it, 'user_rating') or 0)
+                rating = float(field(it, 'user_rating') or 0)
             except ValueError:
-                rating = 0
+                rating = 0.0
+            rating = exact.get(field(it, 'book_id'), rating)
             out.append({
                 'title': title,
                 'author': field(it, 'author_name'),
                 'cover': cover,
                 'link': field(it, 'link'),
-                'rating': max(0, min(5, rating)),
+                'rating': round(max(0.0, min(5.0, rating)), 2),
             })
         if len(items) < 100:
             break
@@ -93,6 +113,15 @@ def books(shelf):
 
 def esc(s):
     return html.escape(s, quote=True)
+
+
+def stars(rating):
+    # The fill runs over the whole stars and then across part of the next one,
+    # so 3.5 covers three stars and half of the fourth, not 70% of the strip.
+    whole = int(rating)
+    fill = whole * STAR_PITCH + (rating - whole) * STAR_W
+    return ('<span class="stars" role="img" aria-label="Rated %g out of 5" style="--fill:%.1f%%"></span>'
+            % (rating, min(100.0, fill / STARS_W * 100)))
 
 
 def render(shelf, entries):
@@ -105,9 +134,8 @@ def render(shelf, entries):
             bits.append('        <img src="%s" alt="" loading="lazy">' % esc(b['cover']))
         bits.append('        <span><span class="title">%s</span><span class="author">%s</span></span>'
                     % (esc(b['title']), esc(b['author'])))
-        if stars_col:
-            bits.append('        <span class="stars">%s</span>'
-                        % ('★' * b['rating'] + '☆' * (5 - b['rating'])))
+        if stars_col and b['rating']:
+            bits.append('        ' + stars(b['rating']))
         bits.append('      </a>')
         rows.append('\n'.join(bits))
 
@@ -124,9 +152,10 @@ def render(shelf, entries):
 def main():
     page = open(PAGE, encoding='utf-8').read()
     total = {}
+    exact = exact_ratings()
 
     for shelf in SHELVES:
-        entries = books(shelf['slug'])
+        entries = books(shelf['slug'], exact)
         total[shelf['slug']] = len(entries)
         block = render(shelf, entries)
         start = '<!-- shelf:%s:start -->' % shelf['marker']
