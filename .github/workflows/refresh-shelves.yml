@@ -76,3 +76,37 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  # Tells Bing and the other IndexNow engines that the pages changed, so they
+  # recrawl without waiting to find the site on their own. Push only: the daily
+  # refresh touches the bookshelf alone, and resubmitting unchanged pages every
+  # day reads as spam. The key is public by design. It proves ownership because
+  # the matching <key>.txt is served from the site root.
+  indexnow:
+    needs: deploy
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Submit the sitemap's pages to IndexNow
+        env:
+          INDEXNOW_KEY: 5bb180addf27882002bdfbe586916e57
+        run: |
+          python3 - <<'EOF'
+          import json, os, re, urllib.request
+          key = os.environ['INDEXNOW_KEY']
+          urls = re.findall(r'<loc>([^<]+)</loc>', open('sitemap.xml', encoding='utf-8').read())
+          body = json.dumps({
+              'host': 'farabimahbub.github.io',
+              'key': key,
+              'keyLocation': 'https://farabimahbub.github.io/%s.txt' % key,
+              'urlList': urls,
+          }).encode()
+          req = urllib.request.Request('https://api.indexnow.org/indexnow', data=body,
+                                       headers={'Content-Type': 'application/json; charset=utf-8'})
+          with urllib.request.urlopen(req, timeout=30) as r:
+              print('IndexNow: %d for %d URLs' % (r.status, len(urls)))
+          EOF
