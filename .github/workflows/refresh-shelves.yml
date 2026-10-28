@@ -29,6 +29,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      shelves: ${{ steps.shelves.outcome }}
     steps:
       - uses: actions/checkout@v4
 
@@ -36,7 +38,13 @@ jobs:
         with:
           python-version: '3.12'
 
+      # A Goodreads outage must not hold back the rest of the site. The script
+      # writes nothing unless every feed answered, so on failure the committed
+      # bookshelf stays as it was and the build carries on. The shelves job
+      # below then fails the run, so the outage still sends a notification.
       - name: Read the Goodreads shelves
+        id: shelves
+        continue-on-error: true
         run: python tools/refresh_shelves.py
 
       - name: Commit if anything changed
@@ -76,6 +84,16 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  shelves:
+    needs: [build, deploy]
+    if: needs.build.outputs.shelves == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report the failed Goodreads read
+        run: |
+          echo "::error::Goodreads did not answer, so the bookshelf kept its last sync. The rest of the site deployed."
+          exit 1
 
   # Tells Bing and the other IndexNow engines that the pages changed, so they
   # recrawl without waiting to find the site on their own. Push only: the daily
