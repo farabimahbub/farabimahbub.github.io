@@ -1,63 +1,45 @@
-"""Regenerate the Bookshelf sections from the Goodreads RSS feeds.
+"""Regenerate the Bookshelf sections from a Goodreads library export.
 
-    python tools/refresh_shelves.py
+    python tools/refresh_shelves.py [path/to/goodreads_library_export.csv]
 
-Why RSS and not the widgets:
+Without a path it takes the newest goodreads_library_export*.csv in the folder
+that holds the repository. Export from Goodreads under My Books > Import and
+export > Export library, then run this, commit bookshelf.html and push.
 
-  custom_widget  carries author and rating, but its shelf, book count and title
-                 are server-side settings keyed to the user id, so an account
-                 gets exactly one of them. Two shelves need two, which Goodreads
-                 will not give. It also writes into a hard-coded element id, so
-                 two of them on one page overwrite each other.
-  grid_widget    honours ?shelf= and takes the element id as a parameter, but
-                 carries only a cover and a title. No author, no rating.
-  list_rss       carries everything and honours ?shelf=, but sends no CORS
-                 headers, so a browser cannot fetch it.
+Why an export and not a feed: Goodreads stopped serving its shelf and updates
+RSS feeds in October 2026 and its robots.txt now disallows both, and the shelf
+pages need a sign-in. The export is the one supported way out, and it carries
+the exact rating, quarter stars included, which the feeds never did.
 
-So the feed gets read here, on a machine rather than in a visitor's browser,
-and the result is committed as plain HTML. The page needs no JavaScript to
-show the shelf, and there is nothing to fail while somebody is looking at it.
-.github/workflows/refresh-shelves.yml runs this daily.
+The export also holds private notes and reviews, so it stays out of the
+repository (.gitignore covers it). Only title, author, rating, shelf and dates
+are read from it.
 
-Ratings come from `user_rating` in the feed, which is the rating the account
-holder gave, not the community average. Goodreads accepts half and quarter
-stars, but the shelf feed rounds them to the nearest whole star, with a half
-rounding down (3.5 shows as 3, 3.75 as 4). The shelf and review pages that show
-the exact value need a sign-in.
-
-The one public place with the exact value is the updates feed ("gave 3.5 stars
-to ..."), and it only holds the last ten actions on the account. So each run
-reads it and keeps what it finds in tools/ratings.json, keyed by Goodreads book
-id. A rating captured once stays after it scrolls out of the updates feed.
-Ratings older than the capture can be added to that file by hand, from the
-`Book Id` and `My Rating` columns of a Goodreads library export:
-
-    {"17308035": 4.75, "205544315": 3.5}
-
-A stored score is used only while it still rounds to what the shelf feed says.
-If it does not, the rating was changed since, so the stored score is dropped
-and the shelf feed's whole star is shown until the new rating is captured.
+Covers are not in the export. tools/covers.json maps Goodreads book id to a
+cover URL. A book missing there gets an Open Library cover looked up by ISBN,
+and the result is saved to covers.json. A book with no ISBN, or none that Open
+Library knows, shows no cover until a URL is added to covers.json by hand.
 """
 
+import csv
+import glob
 import html
 import json
-import math
 import os
 import re
 import sys
+import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime
 
-USER = '195366376'
-FEED = 'https://www.goodreads.com/review/list_rss/{user}?shelf={shelf}&page={page}'
-PROFILE = 'https://www.goodreads.com/review/list/{user}?shelf={shelf}'
-UPDATES = 'https://www.goodreads.com/user/updates_rss/{user}'
-UA = 'Mozilla/5.0 (compatible; shelf-refresh/1.0)'
-MAX_PAGES = 10
+UA = 'Mozilla/5.0 (compatible; bookshelf-builder/1.0)'
+BOOK = 'https://www.goodreads.com/book/show/{id}'
+OPEN_LIBRARY = 'https://covers.openlibrary.org/b/isbn/{isbn}-M.jpg'
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PAGE = os.path.join(HERE, os.pardir, 'bookshelf.html')
-RATINGS = os.path.join(HERE, 'ratings.json')
+REPO = os.path.join(HERE, os.pardir)
+PAGE = os.path.join(REPO, 'bookshelf.html')
+COVERS = os.path.join(HERE, 'covers.json')
 
 # Star geometry, matching .book .stars in style.css: each star is 12.6px wide
 # on a 16px pitch, five of them in 77px.
@@ -69,81 +51,85 @@ SHELVES = [
 ]
 
 
-def fetch(url):
-    req = urllib.request.Request(url, headers={'User-Agent': UA})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return r.read().decode('utf-8', 'replace')
+def export_path():
+    if len(sys.argv) > 1:
+        return sys.argv[1]
+    found = glob.glob(os.path.join(REPO, os.pardir, 'goodreads_library_export*.csv'))
+    if not found:
+        sys.exit('no goodreads_library_export*.csv next to the repository; pass a path')
+    return max(found, key=os.path.getmtime)
 
 
-def field(item, name):
-    m = re.search(r'<%s>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</%s>' % (name, name), item, re.S)
-    return html.unescape(m.group(1)).strip() if m else ''
+def isbn(row):
+    # The export wraps ISBNs as ="9780099584353" so spreadsheets keep them as text.
+    for col in ('ISBN13', 'ISBN'):
+        digits = re.sub(r'[^0-9X]', '', row.get(col, ''))
+        if digits:
+            return digits
+    return ''
 
 
-def exact_ratings():
-    if not os.path.exists(RATINGS):
-        return {}
-    with open(RATINGS, encoding='utf-8') as f:
-        return {str(k): float(v) for k, v in json.load(f).items()}
+def date(row, col):
+    # Goodreads writes 2026/06/01. Blank sorts last.
+    return row.get(col, '').strip() or '0000/00/00'
 
 
-def recent_ratings():
-    # Newest first, so the first rating seen for a book is the current one.
-    # A failure here costs only the newest ratings, so it does not stop the run.
-    try:
-        xml = fetch(UPDATES.format(user=USER))
-    except OSError as e:
-        print('updates feed unavailable: %s' % e)
-        return {}
-    out = {}
-    for it in re.findall(r'<item>(.*?)</item>', xml, re.S):
-        m = re.search(r'gave ([\d.]+) stars? to <a[^>]*href="[^"]*/book/show/(\d+)', it)
-        if m:
-            out.setdefault(m.group(2), float(m.group(1)))
-    return out
-
-
-def as_shelf_feed(score):
-    # How the shelf feed rounds a partial rating: nearest star, half down.
-    return math.ceil(score - 0.5)
-
-
-def books(shelf, exact, stale):
-    out = []
-    for page in range(1, MAX_PAGES + 1):
-        xml = fetch(FEED.format(user=USER, shelf=shelf, page=page))
-        items = re.findall(r'<item>(.*?)</item>', xml, re.S)
-        if not items:
-            break
-        for it in items:
-            # Covers show at 54px wide. Goodreads encodes the size in the file
-            # name, so ask for 160px tall: about 2x for the display size, and
-            # roughly 5KB each against 25KB for the large variant.
-            cover = (field(it, 'book_medium_image_url')
-                     or field(it, 'book_image_url')
-                     or field(it, 'book_large_image_url'))
-            cover = re.sub(r'\._S[XY]\d+_(?=\.[a-z]+$)', '._SY160_', cover)
-            title = re.sub(r'\s+By:.*$', '', field(it, 'title')).strip()
+def read_export(path):
+    shelves = {s['slug']: [] for s in SHELVES}
+    with open(path, encoding='utf-8-sig', newline='') as f:
+        for row in csv.DictReader(f):
+            shelf = row.get('Exclusive Shelf', '')
+            if shelf not in shelves:
+                continue
             try:
-                rating = float(field(it, 'user_rating') or 0)
+                rating = float(row.get('My Rating') or 0)
             except ValueError:
                 rating = 0.0
-            book_id = field(it, 'book_id')
-            if book_id in exact:
-                if as_shelf_feed(exact[book_id]) == rating:
-                    rating = exact[book_id]
-                else:
-                    stale.add(book_id)
-            out.append({
-                'title': title,
-                'author': field(it, 'author_name'),
-                'cover': cover,
-                'link': field(it, 'link'),
+            shelves[shelf].append({
+                'id': row['Book Id'].strip(),
+                'title': row['Title'].strip(),
+                'author': row['Author'].strip(),
+                'isbn': isbn(row),
                 'rating': round(max(0.0, min(5.0, rating)), 2),
+                # Finished books by the day they were finished, falling back to
+                # the day they were shelved. Newest first.
+                'when': date(row, 'Date Read') if row.get('Date Read', '').strip() else date(row, 'Date Added'),
             })
-        if len(items) < 100:
-            break
-    return out
+    for entries in shelves.values():
+        entries.sort(key=lambda b: b['when'], reverse=True)
+    return shelves
+
+
+def open_library_cover(number):
+    # ?default=false makes a missing cover a 404 instead of a blank image.
+    url = OPEN_LIBRARY.format(isbn=number)
+    req = urllib.request.Request(url + '?default=false', method='HEAD', headers={'User-Agent': UA})
+    try:
+        with urllib.request.urlopen(req, timeout=30):
+            return url
+    except urllib.error.HTTPError:
+        return ''
+
+
+def covers_for(shelves):
+    covers = {}
+    if os.path.exists(COVERS):
+        with open(COVERS, encoding='utf-8') as f:
+            covers = json.load(f)
+    missing = []
+    for entries in shelves.values():
+        for b in entries:
+            if b['id'] not in covers and b['isbn']:
+                found = open_library_cover(b['isbn'])
+                if found:
+                    covers[b['id']] = found
+            if b['id'] not in covers:
+                missing.append(b['title'])
+            b['cover'] = covers.get(b['id'], '')
+    with open(COVERS, 'w', encoding='utf-8', newline='\n') as f:
+        json.dump(covers, f, indent=2, sort_keys=True, ensure_ascii=False)
+        f.write('\n')
+    return missing
 
 
 def esc(s):
@@ -160,16 +146,17 @@ def stars(rating):
 
 
 def render(shelf, entries):
-    stars_col = shelf['stars']
-    fallback = PROFILE.format(user=USER, shelf=shelf['slug'])
     rows = []
     for b in entries:
-        bits = ['      <a class="book" href="%s" target="_blank" rel="noopener">' % esc(b['link'] or fallback)]
+        bits = ['      <a class="book" href="%s" target="_blank" rel="noopener">' % esc(BOOK.format(id=b['id']))]
         if b['cover']:
             bits.append('        <img src="%s" alt="" loading="lazy">' % esc(b['cover']))
+        else:
+            # Holds the cover column so the title stays in its place.
+            bits.append('        <span aria-hidden="true"></span>')
         bits.append('        <span><span class="title">%s</span><span class="author">%s</span></span>'
                     % (esc(b['title']), esc(b['author'])))
-        if stars_col and b['rating']:
+        if shelf['stars'] and b['rating']:
             bits.append('        ' + stars(b['rating']))
         bits.append('      </a>')
         rows.append('\n'.join(bits))
@@ -185,41 +172,35 @@ def render(shelf, entries):
 
 
 def main():
+    source = os.path.abspath(export_path())
+    shelves = read_export(source)
+    missing = covers_for(shelves)
     page = open(PAGE, encoding='utf-8').read()
-    total = {}
-    exact = exact_ratings()
-    exact.update(recent_ratings())
-    stale = set()
 
     for shelf in SHELVES:
-        entries = books(shelf['slug'], exact, stale)
-        total[shelf['slug']] = len(entries)
-        block = render(shelf, entries)
+        block = render(shelf, shelves[shelf['slug']])
         start = '<!-- shelf:%s:start -->' % shelf['marker']
         end = '<!-- shelf:%s:end -->' % shelf['marker']
         pattern = re.compile(re.escape(start) + '.*?' + re.escape(end), re.S)
         if not pattern.search(page):
             sys.exit('markers %s / %s not found in bookshelf.html' % (start, end))
-        page = pattern.sub(start + '\n' + block + '    ' + end, page)
+        page = pattern.sub(lambda m: start + '\n' + block + '    ' + end, page)
 
-    stamp = datetime.now(timezone.utc).strftime('%d %B %Y')
+    # Dated by the export, which is when the shelf was last true.
+    stamp = datetime.fromtimestamp(os.path.getmtime(source)).strftime('%d %B %Y').lstrip('0')
     page = re.sub(
         r'(<p class="status" id="shelf-status">).*?(</p>)',
-        lambda m: m.group(1) + 'Synced from Goodreads, ' + stamp + m.group(2),
+        lambda m: m.group(1) + 'Updated from Goodreads, ' + stamp + m.group(2),
         page,
     )
 
     open(PAGE, 'w', encoding='utf-8', newline='').write(page)
-
-    kept = {k: v for k, v in exact.items() if k not in stale}
-    with open(RATINGS, 'w', encoding='utf-8', newline='\n') as f:
-        json.dump(kept, f, indent=2, sort_keys=True)
-        f.write('\n')
-
-    print('currently reading: %d' % total['currently-reading'])
-    print('read:              %d' % total['read'])
-    print('exact ratings:     %d kept, %d dropped as changed' % (len(kept), len(stale)))
-    print('written to bookshelf.html and tools/ratings.json')
+    print('export:            %s' % source)
+    print('currently reading: %d' % len(shelves['currently-reading']))
+    print('read:              %d' % len(shelves['read']))
+    if missing:
+        print('no cover for:      %s' % '; '.join(missing))
+    print('written to bookshelf.html and tools/covers.json')
 
 
 if __name__ == '__main__':

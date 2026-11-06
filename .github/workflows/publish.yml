@@ -1,0 +1,87 @@
+name: Publish
+
+# Publishes the site on every push to main.
+#
+# The bookshelf used to refresh here daily from the Goodreads RSS feeds. Those
+# feeds stopped in October 2026 and robots.txt now disallows them, so the shelf
+# is built locally from a library export (tools/refresh_shelves.py) and arrives
+# in a commit like any other page.
+#
+# Requires: Settings > Pages > Source set to "GitHub Actions".
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:        # and on demand from the Actions tab
+
+permissions:
+  contents: read
+  pages: write      # to publish
+  id-token: write   # to prove the deploy came from this workflow
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble the published site
+        run: |
+          mkdir -p _site
+          rsync -a \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude '.gitignore' \
+            --exclude 'tools' \
+            --exclude '_site' \
+            ./ _site/
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  # Tells Bing and the other IndexNow engines that the pages changed, so they
+  # recrawl without waiting to find the site on their own. The key is public by
+  # design. It proves ownership because the matching <key>.txt is served from
+  # the site root.
+  indexnow:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Submit the sitemap's pages to IndexNow
+        env:
+          INDEXNOW_KEY: 5bb180addf27882002bdfbe586916e57
+        run: |
+          python3 - <<'EOF'
+          import json, os, re, urllib.request
+          key = os.environ['INDEXNOW_KEY']
+          urls = re.findall(r'<loc>([^<]+)</loc>', open('sitemap.xml', encoding='utf-8').read())
+          body = json.dumps({
+              'host': 'farabimahbub.github.io',
+              'key': key,
+              'keyLocation': 'https://farabimahbub.github.io/%s.txt' % key,
+              'urlList': urls,
+          }).encode()
+          req = urllib.request.Request('https://api.indexnow.org/indexnow', data=body,
+                                       headers={'Content-Type': 'application/json; charset=utf-8'})
+          with urllib.request.urlopen(req, timeout=30) as r:
+              print('IndexNow: %d for %d URLs' % (r.status, len(urls)))
+          EOF
